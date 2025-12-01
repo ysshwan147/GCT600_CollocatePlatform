@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Moon Display</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #fff;
+        }
+
+        #visualization-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background-color: #000;
+        }
+
+        /* 밤하늘 배경 이미지 (원하면 변경/삭제 가능) */
+        #backgroundImage {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* 가운데 달 이미지 */
+        #moonImage {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            height: 40vh;
+            pointer-events: none;
+        }
+
+        /* 별들을 올릴 레이어 */
+        #star-layer {
+            pointer-events: none;
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .star {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            image-rendering: auto;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .star.resolved {
+            transform: translate(-50%, -50%) scale(1.15);
+        }
+
+        /* 좌하단 설명/상태 오버레이 */
+        #overlay {
+            position: absolute;
+            left: 1.5rem;
+            bottom: 1.5rem;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 1rem 1.25rem;
+            border-radius: 0.75rem;
+            max-width: 40rem;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+        }
+
+        #statusTitle {
+            font-size: 1rem;
+            margin-bottom: 0.35rem;
+            opacity: 0.9;
+        }
+
+        #statusLine {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div id="visualization-container">
+        <!-- 밤하늘 배경 (원하면 다른 이미지로 교체 가능) -->
+        <img id="backgroundImage" src="/static/images/moon_night_sky.png" alt="Night Sky">
+
+        <!-- 가운데 달 -->
+        <img id="moonImage" src="/static/images/moon_full.png" alt="Moon Phase">
+
+        <!-- 별들이 올라가는 레이어 -->
+        <div id="star-layer"></div>
+
+        <!-- 간단한 상태 오버레이 -->
+        <div id="overlay">
+            <div id="statusTitle">별 하나는 한 사람의 고민입니다.</div>
+            <div id="statusLine">아직 서버와 동기화 중...</div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const starLayer = document.getElementById('star-layer');
+            const statusLine = document.getElementById('statusLine');
+            const moonImage = document.getElementById('moonImage');
+
+            // worry_id -> DOM element 매핑
+            const starMap = new Map();
+
+            // 달 위상 이미지 목록 (0: 보름달, 8: 초승달)
+            const moonPhaseImages = [
+                "/static/images/moon_full.png",        // 0: 모든 고민 해결 or 고민 없음
+                "/static/images/moon_phase1.png",
+                "/static/images/moon_phase2.png",
+                "/static/images/moon_phase3.png",
+                "/static/images/moon_half.png",
+                "/static/images/moon_phase4.png",
+                "/static/images/moon_phase5.png",
+                "/static/images/moon_phase6.png",
+                "/static/images/moon_crescent.png"     // 8: 모든 고민 미해결 상태
+            ];
+
+            // 색 + 해결 여부에 따라 어떤 별 이미지를 쓸지 결정
+            function getStarImageSrc(color, isResolved) {
+                const basePath = "/static/images";
+
+                const safeColor = (color || "yellow").toLowerCase();
+                const suffix = isResolved ? "bright" : "dim";
+
+                switch (safeColor) {
+                    case "white":  return `${basePath}/star_white_${suffix}.png`;
+                    case "black":  return `${basePath}/star_black_${suffix}.png`;
+                    case "blue":   return `${basePath}/star_blue_${suffix}.png`;
+                    case "yellow": return `${basePath}/star_yellow_${suffix}.png`;
+                    case "red":    return `${basePath}/star_red_${suffix}.png`;
+                    default:       return `${basePath}/star_yellow_${suffix}.png`;
+                }
+            }
+
+            // worry DTO 하나로부터 별 이미지 DOM을 생성
+            function createStarElement(worry) {
+                if (!worry || !worry.sky_coord) return null;
+
+                const u = clamp01(worry.sky_coord.u ?? 0.5);
+                const v = clamp01(worry.sky_coord.v ?? 0.5);
+
+                const img = document.createElement('img');
+                img.className = 'star';
+                img.dataset.id = String(worry.id);
+                img.dataset.color = worry.color || 'yellow';
+                img.dataset.resolved = worry.is_resolved ? 'true' : 'false';
+
+                img.src = getStarImageSrc(worry.color, worry.is_resolved);
+
+                // 랜덤 크기 (vw 단위 사용)
+                const minSizeVw = 1.8;
+                const maxSizeVw = 3.2;
+                const sizeVw = minSizeVw + Math.random() * (maxSizeVw - minSizeVw);
+                img.style.width = sizeVw + 'vw';
+
+                // 위치 (0~1 정규화 좌표 -> %)
+                img.style.left = (u * 100).toFixed(2) + '%';
+                img.style.top = (v * 100).toFixed(2) + '%';
+
+                if (worry.is_resolved) {
+                    img.classList.add('resolved');
+                }
+
+                return img;
+            }
+
+            function clamp01(x) {
+                if (x < 0) return 0;
+                if (x > 1) return 1;
+                return x;
+            }
+
+            function clearAllStars() {
+                starMap.clear();
+                while (starLayer.firstChild) {
+                    starLayer.removeChild(starLayer.firstChild);
+                }
+            }
+
+            function applySnapshot(worries, totalCount, unresolvedCount) {
+                clearAllStars();
+
+                if (!Array.isArray(worries)) {
+                    statusLine.textContent = "등록된 고민이 아직 없습니다.";
+                    updateMoonPhase(0, 0);
+                    return;
+                }
+
+                for (const w of worries) {
+                    const star = createStarElement(w);
+                    if (!star) continue;
+
+                    starLayer.appendChild(star);
+                    starMap.set(w.id, star);
+                }
+
+                // 서버에서 카운트가 오면 사용, 없으면 직접 계산
+                let total = (typeof totalCount === "number") ? totalCount : worries.length;
+                let unresolved = (typeof unresolvedCount === "number")
+                    ? unresolvedCount
+                    : computeUnresolvedFromStars();
+
+                updateStatusAndMoon(total, unresolved);
+            }
+
+            function handleWorryCreated(worry, totalCount, unresolvedCount) {
+                if (!worry) return;
+
+                const existing = starMap.get(worry.id);
+                if (existing) {
+                    updateStar(worry);
+                } else {
+                    const star = createStarElement(worry);
+                    if (star) {
+                        starLayer.appendChild(star);
+                        starMap.set(worry.id, star);
+                    }
+                }
+
+                refreshStatusAndMoon(totalCount, unresolvedCount);
+            }
+
+            function handleWorryResolved(worry, totalCount, unresolvedCount) {
+                if (!worry) return;
+
+                updateStar(worry);
+                refreshStatusAndMoon(totalCount, unresolvedCount);
+            }
+
+            function refreshStatusAndMoon(totalCount, unresolvedCount) {
+                // 서버에서 값이 오면 사용, 아니면 starMap에서 재계산
+                let total = (typeof totalCount === "number") ? totalCount : starMap.size;
+                let unresolved = (typeof unresolvedCount === "number")
+                    ? unresolvedCount
+                    : computeUnresolvedFromStars();
+
+                updateStatusAndMoon(total, unresolved);
+            }
+
+            function updateStar(worry) {
+                const star = starMap.get(worry.id);
+                if (!star) {
+                    // 없으면 새로 만들어 붙여도 됨
+                    const created = createStarElement(worry);
+                    if (created) {
+                        starLayer.appendChild(created);
+                        starMap.set(worry.id, created);
+                    }
+                    return;
+                }
+
+                star.dataset.color = worry.color || 'yellow';
+                star.dataset.resolved = worry.is_resolved ? 'true' : 'false';
+                star.src = getStarImageSrc(worry.color, worry.is_resolved);
+
+                if (worry.is_resolved) {
+                    star.classList.add('resolved');
+                } else {
+                    star.classList.remove('resolved');
+                }
+            }
+
+            function computeUnresolvedFromStars() {
+                let unresolvedCount = 0;
+                starMap.forEach((star) => {
+                    const isResolved = (star.dataset.resolved === 'true');
+                    if (!isResolved) unresolvedCount++;
+                });
+                return unresolvedCount;
+            }
+
+            function updateStatusAndMoon(total, unresolved) {
+                const resolved = Math.max(0, total - unresolved);
+
+                statusLine.textContent =
+                    `걱정 ${unresolved}개, 해결된 고민 ${resolved}개`;
+
+                updateMoonPhase(total, unresolved);
+            }
+
+            function updateMoonPhase(totalCount, unresolvedCount) {
+                if (!moonImage) return;
+
+                if (totalCount <= 0) {
+                    // 고민이 없으면 항상 보름달
+                    moonImage.src = moonPhaseImages[0];
+                    return;
+                }
+
+                const unresolvedRatio = unresolvedCount / totalCount; // 0 ~ 1
+                const maxIndex = moonPhaseImages.length - 1;
+
+                // unresolvedRatio = 0   -> index 0  (보름달)
+                // unresolvedRatio = 1   -> index 8  (초승달)
+                let idx = Math.round(unresolvedRatio * maxIndex);
+                if (idx < 0) idx = 0;
+                if (idx > maxIndex) idx = maxIndex;
+
+                moonImage.src = moonPhaseImages[idx];
+            }
+
+            // ---------------------------------------------------
+            // WebSocket 연결
+            // ---------------------------------------------------
+
+            function connect() {
+                const protocol = (location.protocol === "https:") ? "wss" : "ws";
+                const ws = new WebSocket(protocol + "://" + location.host + "/ws");
+
+                ws.onopen = function () {
+                    console.log("[Web] WebSocket connected");
+                };
+
+                ws.onmessage = function (event) {
+                    let data;
+                    try {
+                        data = JSON.parse(event.data);
+                    } catch (e) {
+                        console.warn("[Web] Invalid JSON", e, event.data);
+                        return;
+                    }
+
+                    if (!data || !data.type) return;
+
+                    switch (data.type) {
+                        case "snapshot":
+                            console.log("[Web] snapshot received", data);
+                            applySnapshot(
+                                data.worries || [],
+                                data.total_count,
+                                data.unresolved_count
+                            );
+                            break;
+
+                        case "worry_created":
+                            console.log("[Web] worry_created", data);
+                            handleWorryCreated(
+                                data.worry,
+                                data.total_count,
+                                data.unresolved_count
+                            );
+                            break;
+
+                        case "worry_resolved":
+                            console.log("[Web] worry_resolved", data);
+                            handleWorryResolved(
+                                data.worry,
+                                data.total_count,
+                                data.unresolved_count
+                            );
+                            break;
+
+                        case "worry_detail":
+                            // 이 페이지에서는 별 선택 결과를 직접 쓰지 않음
+                            console.log("[Web] worry_detail (ignored on web)", data);
+                            break;
+
+                        default:
+                            console.log("[Web] Unknown message type:", data.type);
+                            break;
+                    }
+                };
+
+                ws.onclose = function () {
+                    console.log("[Web] WebSocket closed. Reconnecting in 3s...");
+                    setTimeout(connect, 3000);
+                };
+
+                ws.onerror = function (err) {
+                    console.error("[Web] WebSocket error:", err);
+                };
+            }
+
+            connect();
+        })();
+    </script>
+</body>
+</html>
