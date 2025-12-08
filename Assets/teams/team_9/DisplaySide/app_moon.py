@@ -3,6 +3,7 @@ import json
 import datetime
 import random
 import math
+from sentence_analyze import classify_sentence
 
 from flask import Flask, jsonify, render_template
 from flask_sock import Sock
@@ -55,7 +56,8 @@ def choose_color(text: str, location: str) -> str:
     디버깅용: 텍스트/위치와 상관없이
     white / black / blue / yellow / red 중 하나를 랜덤 반환.
     """
-    return random.choice(["white", "black", "blue", "yellow", "red"])
+    _, color, _, _ = classify_sentence(text)
+    return color
 
 
 def random_sky_coord() -> dict:
