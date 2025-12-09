@@ -12,6 +12,11 @@ from flask_sock import Sock
 app = Flask(__name__, static_folder="static", template_folder="templates")
 sock = Sock(app)
 
+# 월 디스플레이 중앙의 달 영역 (별이 피해야 하는 영역)
+MOON_CENTER_U = 0.5
+MOON_CENTER_V = 0.5
+MOON_RADIUS = 0.18  # 필요하면 조절 (0~0.5 정도)
+
 # ============================================================
 # 데이터 모델 (메모리 상 관리; 필요하면 DB로 교체)
 # ============================================================
@@ -30,16 +35,109 @@ sock = Sock(app)
 #   "jar_position": {"x": float, "y": float, "z": float},
 #   "sky_coord": {"u": float, "v": float},
 # }
+
+# ============================================================
+# 디버깅 or 데모용 초기 고민 20개 (5개 미해결 + 15개 해결됨)
+# ============================================================
+def make_time(offset_hours):
+    """현재에서 -offset_hours 만큼 과거 시간 만들어줌."""
+    t = datetime.datetime.utcnow() - datetime.timedelta(hours=offset_hours)
+    return t.isoformat() + "Z"
+
+def random_sky():
+    """
+    달이 있는 중앙 원형 영역을 피해서 랜덤 좌표 생성.
+    (0 <= u, v <= 1)
+    """
+    while True:
+        u = random.random()
+        v = random.random()
+
+        # 달 중심과 거리 계산
+        du = u - MOON_CENTER_U
+        dv = v - MOON_CENTER_V
+        dist2 = du * du + dv * dv
+
+        # 달의 반경 영역 내부라면 다시 뽑기
+        if dist2 < (MOON_RADIUS * MOON_RADIUS):
+            continue
+
+        return {"u": u, "v": v}
+
+def random_pos():
+    """백자 주변의 적당한 랜덤 위치"""
+    return {
+        "x": round(random.uniform(-0.3, 0.3), 3),
+        "y": round(random.uniform( 0.0, 0.6), 3),
+        "z": round(random.uniform(-0.3, 0.3), 3),
+    }
+
+COLORS = ["white","black","blue","yellow","red"]
+
+init_worries = []
+
+# 해결된 고민 20개 자동 생성
+resolved_examples = [
+    ("I couldn’t sleep well for days.", "I rested properly over the weekend."),
+    ("I had a serious argument with my family.", "We talked it out and made peace."),
+    ("My assignment schedule felt overwhelming.", "I broke it into smaller tasks."),
+    ("I was stressed because I wasn’t exercising.", "I adjusted my routine and started again."),
+    ("Work pressure was becoming too much.", "I talked with my supervisor and reorganized tasks."),
+    ("I was anxious about an upcoming presentation.", "Repeated practice boosted my confidence."),
+    ("My physical condition felt worse lately.", "Regular exercise improved my stamina."),
+    ("My team project was full of conflicts.", "We redefined roles and resolved issues."),
+    ("I was worried about my low savings.", "I started managing my expenses strictly."),
+    ("I feared I wouldn’t meet the deadline.", "I finished everything on time."),
+    ("My room was a mess and stressed me out.", "I cleaned everything in one go."),
+    ("I had ongoing trouble with a close friend.", "We met and cleared misunderstandings."),
+    ("I was anxious about my health condition.", "Medical checkup showed everything was fine."),
+    ("Job hunting was exhausting and stressful.", "I finally received an offer."),
+    ("My class schedule was too packed.", "I rearranged it for better balance."),
+    ("I felt lost about my future career path.", "I set clear short-term goals."),
+    ("I kept comparing myself to others.", "I learned to focus on my own pace."),
+    ("I felt lonely after moving to a new city.", "I slowly built new friendships."),
+    ("I was afraid of failing an important exam.", "Consistent studying paid off."),
+    ("I lost motivation for everything.", "Taking a short break helped me reset."),
+]
+
+# 6~20번 자동 생성
+for i in range(20):
+
+    is_resolved = True
+    
+    if i > 15:
+        is_resolved = False
+
+    idx = i
+    text, resolved_text = resolved_examples[i]
+    init_worries.append({
+        "id": idx,
+        "text": text,
+        "resolved_text": resolved_text,
+        "time": make_time(100 - i * 2),
+        "resolved_at": make_time(50 - i),   # 해결은 더 최근 시간
+        "location": random.choice([
+            "Seoul, Korea", "Busan, Korea", "Tokyo, Japan",
+            "New York, USA", "Paris, France",
+            "London, UK", "Berlin, Germany",
+            "Sydney, Australia", "Taipei, Taiwan"
+        ]),
+        "color": random.choice(COLORS),
+        "is_resolved": is_resolved,
+        "jar_position": random_pos(),
+        "sky_coord": random_sky(),
+    })
+
+
+
 worries = []
 next_worry_id = 1
 
+worries = init_worries.copy()
+next_worry_id = len(worries) + 1
+
 # 현재 연결된 WebSocket 클라이언트들
 clients = set()
-
-# 월 디스플레이 중앙의 달 영역 (별이 피해야 하는 영역)
-MOON_CENTER_U = 0.5
-MOON_CENTER_V = 0.5
-MOON_RADIUS = 0.18  # 필요하면 조절 (0~0.5 정도)
 
 
 # ============================================================

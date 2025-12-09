@@ -1,13 +1,9 @@
-using Meta.WitAi.Dictation;
-using Meta.WitAi.Dictation.Data;
-using Oculus.Voice.Dictation;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.Windows.WebCam;
 using UnityEngine.Rendering.Universal;
 
 public class TouchMemoManager : MonoBehaviour
@@ -27,7 +23,6 @@ public class TouchMemoManager : MonoBehaviour
         public bool isSolved;
     }
 
-    //public AppDictationExperience dictation;   // Dictation 빌딩 블록
     public WebComm comm;
     public GameObject jar;
     public GameObject buttons;
@@ -72,6 +67,9 @@ public class TouchMemoManager : MonoBehaviour
     public GameObject needleObject;               // 바늘 오브젝트
     public GameObject interactionMarkerPrefab;
 
+    public GameObject solveStartButton;
+    public GameObject solveStopButton;
+
     private Vector3 lastShownMemoPosition;
     private bool memoInteractionActive = false;
     private Transform cachedIndexTip;
@@ -83,17 +81,11 @@ public class TouchMemoManager : MonoBehaviour
 
     void Awake()
     {
-        // 음성 인식 결과 이벤트 연결 (지금은 주석 처리)
-        //dictation.DictationEvents.OnPartialTranscription.AddListener(OnPartialTranscription);
-        //dictation.DictationEvents.OnFullTranscription.AddListener(OnFullTranscription);
-        //dictation.DictationEvents.OnDictationSessionStopped.AddListener(OnDictationSessionStopped);
+
     }
 
     private void OnEnable()
     {
-        if (comm == null)
-            comm = FindObjectOfType<WebComm>();
-
         if (comm != null)
         {
             // 서버 전체 스냅샷 / 생성 / 해결 이벤트 구독
@@ -221,7 +213,8 @@ public class TouchMemoManager : MonoBehaviour
         // 1) 마커 생성
         if (markerPrefab != null)
         {
-            GameObject marker = Instantiate(markerPrefab, memo.position, Quaternion.identity);
+            var parent = jar.transform;
+            GameObject marker = Instantiate(markerPrefab, memo.position, Quaternion.identity, parent);
             memo.markerObject = marker;
 
             var detector = marker.GetComponent<MarkerTouchDetector>();
@@ -385,86 +378,43 @@ public class TouchMemoManager : MonoBehaviour
     /// </summary>
     public void OnStartButton()
     {
-        if (!hasPosition)
-        {
-            Debug.LogWarning("[Memo] No position selected yet.");
-            if (debugText != null)
-                debugText.text = "Tap the Baekja first!";
-            return;
-        }
 
-        if (isRecording)
-        {
-            Debug.Log("[Memo] Already recording.");
-            return;
-        }
-
-        currentText = "";
-        isRecording = true;
-
-        Debug.Log("[Memo] Dictation started.");
-        if (debugText != null)
-            debugText.text = "Listening...";
-
-        //dictation.Activate();
-    }
-
-    /// <summary>
-    /// Stop 버튼 (녹음 종료)
-    /// </summary>
-    public void OnStopButton()
-    {
         if (!isRecording)
         {
-            Debug.Log("[Memo] Not recording.");
-            return;
+            currentText = "";
+            isRecording = true;
+
+            if (debugText != null)
+                debugText.text = "Listening...";
         }
-
-        Debug.Log("[Memo] Dictation stopping...");
-        //dictation.Deactivate();
-        isRecording = false;
-
-        SaveCurrentMemo();
+        else
+        {
+            isRecording = false;
+        }
     }
 
-    // --- Dictation 이벤트 핸들러 ---
-
-    private void OnPartialTranscription(string text)
-    {
-        currentText = text;
-
-        if (debugText != null)
-            debugText.text = $"(Partial)\n{text}";
-    }
-
-    private void OnFullTranscription(string text)
-    {
-        currentText = text;
-
-        if (debugText != null)
-            debugText.text = $"(Full)\n{text}";
-    }
-
-    private void OnDictationSessionStopped(DictationSession session)
-    {
-        SaveCurrentMemo();
-    }
 
     // --- 메모 저장 (고민 남기기) ---
 
-    private void SaveCurrentMemo()
+    public void SaveCurrentMemo(string recordedText)
     {
+        currentText = recordedText;
+
         if (string.IsNullOrWhiteSpace(currentText))
         {
             Debug.Log("[Memo] Empty text, not saving.");
             if (debugText != null)
                 debugText.text = "No text.";
 
-            currentText = "Developement is so difficult";
+            currentText = "No text";
             //return;
         }
 
         StartCoroutine(SaveCurrentMemoRoutine());
+
+        var currentLocation = defaultLocation;
+
+        SendCreateWorryToServer(currentText, currentLocation, currentPosition);
     }
 
     private IEnumerator SaveCurrentMemoRoutine()
@@ -478,13 +428,6 @@ public class TouchMemoManager : MonoBehaviour
 
         yield return new WaitForSeconds(processingDelay);
 
-        var currentLocation = defaultLocation;
-
-        Debug.Log($"[Memo Local] {DateTime.Now} @ {currentPosition} : {currentText}");
-
-        // 서버에 새 고민 생성 요청 (id/색/sky 좌표는 서버가 결정)
-        SendCreateWorryToServer(currentText, currentLocation, currentPosition);
-
         // 사운드 재생
         if (audioSource != null)
         {
@@ -493,10 +436,12 @@ public class TouchMemoManager : MonoBehaviour
         }
 
         if (debugText != null)
-            debugText.text = $"Saved!\n{currentText}";
+            debugText.text = currentText;
 
         if (loadingIcon != null)
             loadingIcon.SetActive(false);
+
+        yield return new WaitForSeconds(processingDelay);
 
         ClearData();
     }
@@ -591,10 +536,12 @@ public class TouchMemoManager : MonoBehaviour
         // 3) 메모 위치에 새 프리팹 생성
         if (interactionMarkerPrefab != null)
         {
+            var parent = jar.transform;
             activeInteractionMarker = Instantiate(
                 interactionMarkerPrefab,
                 lastShownMemoPosition,
-                Quaternion.identity
+                Quaternion.identity,
+                parent
             );
 
             var detector = activeInteractionMarker.GetComponent<NeedleMarkerTouchDetector>();
@@ -633,6 +580,9 @@ public class TouchMemoManager : MonoBehaviour
         }
 
         Debug.Log("[Memo] Interaction stopped.");
+
+        solveStartButton.SetActive(true);
+        solveStopButton.SetActive(false);
     }
 
     /// <summary>

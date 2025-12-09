@@ -220,7 +220,8 @@ public class WebComm : MonoBehaviour
 
     private async Task ReceiveLoop()
     {
-        var buffer = new byte[4096];
+        // 한 번에 받을 버퍼 (프레임 단위 버퍼)
+        var buffer = new byte[8192];
 
         while (ws != null && ws.State == WebSocketState.Open)
         {
@@ -230,32 +231,52 @@ public class WebComm : MonoBehaviour
                 continue;
             }
 
-            WebSocketReceiveResult result = null;
-            var segment = new ArraySegment<byte>(buffer);
-
             try
             {
-                result = await ws.ReceiveAsync(segment, cts.Token);
+                // 하나의 "메시지"를 모두 모을 때까지 반복
+                ArraySegment<byte> segment = new ArraySegment<byte>(buffer);
+                using (var ms = new System.IO.MemoryStream())
+                {
+                    WebSocketReceiveResult result;
+
+                    do
+                    {
+                        result = await ws.ReceiveAsync(segment, cts.Token);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            Debug.Log("[WebComm] Server closed connection.");
+                            return;
+                        }
+
+                        if (result.MessageType != WebSocketMessageType.Text)
+                        {
+                            // 텍스트가 아니면 그냥 무시 (필요하면 Binary 처리 추가)
+                            break;
+                        }
+
+                        // 이번 프레임 내용 추가
+                        ms.Write(buffer, 0, result.Count);
+
+                        // 메시지 한 개가 여러 프레임으로 나뉘어 올 수 있으므로
+                        // EndOfMessage가 true 될 때까지 계속 받는다
+                    } while (!result.EndOfMessage);
+
+                    if (ms.Length > 0)
+                    {
+                        string msg = Encoding.UTF8.GetString(ms.ToArray());
+                        HandleServerMessage(msg);
+                    }
+                }
             }
             catch (Exception e)
             {
                 Debug.LogError("[WebComm] Receive error: " + e);
                 break;
             }
-
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                Debug.Log("[WebComm] Server closed connection.");
-                break;
-            }
-
-            if (result.MessageType == WebSocketMessageType.Text)
-            {
-                string msg = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                HandleServerMessage(msg);
-            }
         }
     }
+
 
     // ---------------------------------------------------
     // 서버 -> 클라이언트 메시지 처리
