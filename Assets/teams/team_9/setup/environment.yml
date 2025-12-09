@@ -1,0 +1,10 @@
+name: mv600
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - torchvision
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchaudio
